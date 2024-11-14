@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="input_objects" default="/sensing/radar/detected_objects"/>
+  <arg name="output_objects" default="/unknown_filtered_objects"/>
+  <arg name="vector_map_topic" default="/map/vector_map"/>
+
+  <node pkg="lanelet_unknown_filter" exec="lanelet_unknown_filter" name="lanelet_unknown_filter" output="screen">
+    <remap from="/output/objects" to="$(var output_objects)"/>
+    <remap from="/input/objects" to="$(var input_objects)"/>
+    <remap from="/vector_map" to="$(var vector_map_topic)"/>
+    <param name="distance_threshold" value="0.3"/>
+  </node>
+</launch>
