@@ -62,7 +62,7 @@ private:
 	// parameter
 	double dist_th;
   int nearest_num;
-  bool remove_allunknown;
+  bool remove_all_unknown;
 
 	void mapCallback(const HADMapBin::ConstSharedPtr msg);
   void objectsCallback(const DetectedObjects::ConstSharedPtr in_objects);

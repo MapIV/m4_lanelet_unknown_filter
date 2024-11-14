@@ -5,19 +5,19 @@ namespace lanelet_unknown_filter
 LaneletUnknownFilterNode::LaneletUnknownFilterNode(const rclcpp::NodeOptions & node_options)
 : Node("lanelet_unknown_filter", node_options)
 {
-	dist_th = static_cast<double>(this->declare_parameter("distance_threshold",1.0));
-  remove_allunknown = static_cast<double>(this->declare_parameter("remove_allunknown",false));
+	dist_th = static_cast<double>(this->declare_parameter("distance_to_lane_threshold", 1.0));
+  remove_all_unknown = static_cast<double>(this->declare_parameter("remove_all_unknown",false));
 	sub_objects_ = this->create_subscription<DetectedObjects>(
-    "/input/objects", 1,
+    "input/objects", 1,
     std::bind(&LaneletUnknownFilterNode::objectsCallback, this, std::placeholders::_1));
   sub_map_ = this->create_subscription<HADMapBin>(
-    "/vector_map", rclcpp::QoS{1}.transient_local(),
+    "vector_map", rclcpp::QoS{1}.transient_local(),
     std::bind(&LaneletUnknownFilterNode::mapCallback, this, std::placeholders::_1));
-  pub_objects_ = this->create_publisher<DetectedObjects>("/output/objects", rclcpp::QoS{1});
+  pub_objects_ = this->create_publisher<DetectedObjects>("output/objects", rclcpp::QoS{1});
 }
 
 void LaneletUnknownFilterNode::mapCallback(const HADMapBin::ConstSharedPtr msg){
-  RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: Start aloading lanelet");
+  RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: Start loading lanelet");
   lanelet_map_ptr_ = std::make_shared<lanelet::LaneletMap>();
   lanelet::utils::conversion::fromBinMsg(
     *msg, lanelet_map_ptr_, &traffic_rules_ptr_, &routing_graph_ptr_);
@@ -25,37 +25,51 @@ void LaneletUnknownFilterNode::mapCallback(const HADMapBin::ConstSharedPtr msg){
 }
 
 void LaneletUnknownFilterNode::objectsCallback(const DetectedObjects::ConstSharedPtr in_objects){
-	if (!lanelet_map_ptr_) {
+	// If map is not loaded, return
+  if (!lanelet_map_ptr_) {
     return;
   }
-  RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: 2");
-  auto map2ego = transform_listener_.getTransform(
-    "map",        // src
-    "base_link",  // target
-    in_objects->header.stamp, rclcpp::Duration::from_seconds(0.1));
-  // 初期位置を設定しないとmapとbaselinkが別のtftreeとなる。その状態でmap2egoなどにアクセスするとセグフォが生じる
-  if (!map2ego) return;
-  RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: 21");
 
-	double ego_x = map2ego->transform.translation.x;
-	double ego_y = map2ego->transform.translation.y;
-  double ego_z = map2ego->transform.translation.z;
-  Pose ego_pose_from_map;
-  ego_pose_from_map.position.x = ego_x;
-  ego_pose_from_map.position.y = ego_y;
-  ego_pose_from_map.position.z = ego_z;
+  // Initialize output objects
+  DetectedObjects output;
+  output.header = in_objects->header;
 
-  auto quat_geo = map2ego->transform.rotation;
-  tf2::Quaternion quat(quat_geo.x, quat_geo.y, quat_geo.z, quat_geo.w);
-  double r,p,yaw;//出力値[rad]
-  tf2::Matrix3x3(quat).getRPY(r, p, yaw);//クォータニオン→オイラー角
+  // If simply removing all unknown objects, filter
+  if(remove_all_unknown) {
+    // RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: Not filtering by lane, simply removing unknowns ");
+    for (const auto & object : in_objects->objects) {
+      if((int)object.classification.front().label != 0) output.objects.push_back(object);
+    }
+  }
+  else {
+    // Filtering by nearby lanes
+    // RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: Filtering by lane");
+    auto map2ego = transform_listener_.getTransform(
+      "map",        // src
+      "base_link",  // target
+      in_objects->header.stamp, rclcpp::Duration::from_seconds(0.1));
+    // 初期位置を設定しないとmapとbaselinkが別のtftreeとなる。その状態でmap2egoなどにアクセスするとセグフォが生じる
+    if (!map2ego) return;
 
-  lanelet::BasicPoint2d ego_point(ego_x, ego_y);
-  lanelet::ConstLanelets lanes_near_ego;
-  std::vector<std::pair<double, lanelet::Lanelet>> ego_lanelets =
-  lanelet::geometry::findNearest(lanelet_map_ptr_->laneletLayer, ego_point, 10);
-  if((int)ego_lanelets.size() == 0) return;
-  for (const auto & lanelet_ : ego_lanelets) {
+    double ego_x = map2ego->transform.translation.x;
+    double ego_y = map2ego->transform.translation.y;
+    double ego_z = map2ego->transform.translation.z;
+    Pose ego_pose_from_map;
+    ego_pose_from_map.position.x = ego_x;
+    ego_pose_from_map.position.y = ego_y;
+    ego_pose_from_map.position.z = ego_z;
+
+    auto quat_geo = map2ego->transform.rotation;
+    tf2::Quaternion quat(quat_geo.x, quat_geo.y, quat_geo.z, quat_geo.w);
+    double r,p,yaw;//出力値[rad]
+    tf2::Matrix3x3(quat).getRPY(r, p, yaw);//クォータニオン→オイラー角
+
+    lanelet::BasicPoint2d ego_point(ego_x, ego_y);
+    lanelet::ConstLanelets lanes_near_ego;
+    std::vector<std::pair<double, lanelet::Lanelet>> ego_lanelets =
+    lanelet::geometry::findNearest(lanelet_map_ptr_->laneletLayer, ego_point, 10);
+    if((int)ego_lanelets.size() == 0) return;
+    for (const auto & lanelet_ : ego_lanelets) {
       if(lanelet_.first > 20) continue;
       lanelet::ConstLanelet lanelet = lanelet_.second;
       auto lanes = routing_graph_ptr_->following(lanelet);
@@ -67,51 +81,36 @@ void LaneletUnknownFilterNode::objectsCallback(const DetectedObjects::ConstShare
         }
       }
     }
-  DetectedObjects output;
-  output.header = in_objects->header;
-  RouteHandler rh = RouteHandler();
-  for (const auto & object : in_objects->objects) {
-    double obj_x_from_ego = object.kinematics.pose_with_covariance.pose.position.x;
-    double obj_y_from_ego = object.kinematics.pose_with_covariance.pose.position.y;
-	  double obj_x = ego_x + std::cos(yaw)*obj_x_from_ego - std::sin(yaw)*obj_y_from_ego;
-	  double obj_y = ego_y + std::sin(yaw)*obj_x_from_ego - std::cos(yaw)*obj_y_from_ego;
-    geometry_msgs::msg::Point obj_pos_geo;
-    obj_pos_geo.x = obj_x;
-    obj_pos_geo.y = obj_y;
-    obj_pos_geo.z = map2ego->transform.translation.z;
-	  lanelet::BasicPoint2d search_point(obj_x, obj_y);
+    RouteHandler rh = RouteHandler();
+    for (const auto & object : in_objects->objects) {
+      if((int)object.classification.front().label != 0) {
+        output.objects.push_back(object);
+      }
+      else {
+        double obj_x_from_ego = object.kinematics.pose_with_covariance.pose.position.x;
+        double obj_y_from_ego = object.kinematics.pose_with_covariance.pose.position.y;
+        double obj_x = ego_x + std::cos(yaw)*obj_x_from_ego - std::sin(yaw)*obj_y_from_ego;
+        double obj_y = ego_y + std::sin(yaw)*obj_x_from_ego - std::cos(yaw)*obj_y_from_ego;
+        geometry_msgs::msg::Point obj_pos_geo;
+        obj_pos_geo.x = obj_x;
+        obj_pos_geo.y = obj_y;
+        obj_pos_geo.z = map2ego->transform.translation.z;
+        lanelet::BasicPoint2d search_point(obj_x, obj_y);
+        std::vector<std::pair<double, lanelet::Lanelet>> near_obj_lanelets =
+        lanelet::geometry::findNearest(lanelet_map_ptr_->laneletLayer, search_point, 1);
+        lanelet::ConstLanelet obj_closest_lanelet = near_obj_lanelets[0].second;
 
-    
-    //lanelet::ConstLanelets ego_closest_lanelet;//, next_lanelet;
-    
-
-    std::vector<std::pair<double, lanelet::Lanelet>> near_obj_lanelets =
-    lanelet::geometry::findNearest(lanelet_map_ptr_->laneletLayer, search_point, 1);
-    lanelet::ConstLanelet obj_closest_lanelet = near_obj_lanelets[0].second;
-    //if(!(rh.getClosestLaneletWithinRoute(ego_pose_from_map, &ego_closest_lanelet))) {}
-
-    bool should_be_changed = checkObjectCondition(object, search_point, lanes_near_ego);
-    // RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: ego_closest_lanelet=%d",(int)ego_closest_lanelet.size());
-    RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: lanes_near_ego=%d",(int)lanes_near_ego.size());
-
-    // auto pub_obj = change_yaw(lanes_near_ego[nearest_num], object, obj_pos_geo);
-    // auto pub_obj = change_yaw(object);
-    // pub_obj.classification[0].label = 1;
-		// output.objects.push_back(pub_obj);
-    if(should_be_changed){
-      RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: 1");
-			auto pub_obj = change_yaw_and_size(obj_closest_lanelet, object, obj_pos_geo);
-      RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: 11");
-      pub_obj.classification[0].label = 1;
-			output.objects.push_back(pub_obj);
-		}
-    else if(remove_allunknown){
-      if((int)object.classification.front().label != 0) output.objects.push_back(object);
+        bool should_be_changed = checkObjectCondition(object, search_point, lanes_near_ego);
+        // RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: lanes_near_ego=%d",(int)lanes_near_ego.size());
+        if(should_be_changed){
+          auto pub_obj = change_yaw_and_size(obj_closest_lanelet, object, obj_pos_geo);
+          pub_obj.classification[0].label = 1; // CAR
+          output.objects.push_back(pub_obj);
+        }
+      }
     }
-    else output.objects.push_back(object);
-
   }
-  if(output.objects.size()) pub_objects_->publish(output);
+  pub_objects_->publish(output);
 }
 
 DetectedObject LaneletUnknownFilterNode::change_yaw_and_size(
@@ -154,10 +153,10 @@ bool LaneletUnknownFilterNode::checkObjectCondition(
     // }
     // itr++;
   }
-  RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: dist_to_nearest_lanelet=%lf",dist_to_nearest_lanelet);
-  RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: dist_th=%lf",dist_th);
+  // RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: dist_to_nearest_lanelet=%lf",dist_to_nearest_lanelet);
+  // RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: dist_th=%lf",dist_th);
 	if (dist_to_nearest_lanelet <= dist_th) condition_cnt += 1000;
-  RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: cnt=%d", condition_cnt);
+  // RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: cnt=%d", condition_cnt);
 	if (condition_cnt == 1001) {
     return true;
   }
