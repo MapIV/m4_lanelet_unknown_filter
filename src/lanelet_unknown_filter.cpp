@@ -69,8 +69,9 @@ void LaneletUnknownFilterNode::objectsCallback(const DetectedObjects::ConstShare
     std::vector<std::pair<double, lanelet::Lanelet>> ego_lanelets =
     lanelet::geometry::findNearest(lanelet_map_ptr_->laneletLayer, ego_point, 10);
     if((int)ego_lanelets.size() == 0) return;
+    double SEARCH_LANELET_THRESHOLD = 20.0;
     for (const auto & lanelet_ : ego_lanelets) {
-      if(lanelet_.first > 20) continue;
+      if(lanelet_.first > SEARCH_LANELET_THRESHOLD) continue;
       lanelet::ConstLanelet lanelet = lanelet_.second;
       auto lanes = routing_graph_ptr_->following(lanelet);
       for (const auto & lane : lanes) {
@@ -90,7 +91,7 @@ void LaneletUnknownFilterNode::objectsCallback(const DetectedObjects::ConstShare
         double obj_x_from_ego = object.kinematics.pose_with_covariance.pose.position.x;
         double obj_y_from_ego = object.kinematics.pose_with_covariance.pose.position.y;
         double obj_x = ego_x + std::cos(yaw)*obj_x_from_ego - std::sin(yaw)*obj_y_from_ego;
-        double obj_y = ego_y + std::sin(yaw)*obj_x_from_ego - std::cos(yaw)*obj_y_from_ego;
+        double obj_y = ego_y + std::sin(yaw)*obj_x_from_ego + std::cos(yaw)*obj_y_from_ego;
         geometry_msgs::msg::Point obj_pos_geo;
         obj_pos_geo.x = obj_x;
         obj_pos_geo.y = obj_y;
@@ -155,9 +156,10 @@ bool LaneletUnknownFilterNode::checkObjectCondition(
   }
   // RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: dist_to_nearest_lanelet=%lf",dist_to_nearest_lanelet);
   // RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: dist_th=%lf",dist_th);
-	if (dist_to_nearest_lanelet <= dist_th) condition_cnt += 1000;
+	if (dist_to_nearest_lanelet <= dist_th) condition_cnt += 10;
   // RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: cnt=%d", condition_cnt);
-	if (condition_cnt == 1001) {
+	if (condition_cnt == 11) {
+    // RCLCPP_INFO(get_logger(), "[LaneletUnknownFilter]: dist_to_nearest_lanelet=%lf", dist_to_nearest_lanelet);
     return true;
   }
 	else return false;

@@ -4,7 +4,7 @@
   <arg name="output/objects" default="/perception/object_recognition/detection/radar/lane_filtered_objects"/>
   <arg name="vector_map_topic" default="/map/vector_map"/>
   <arg name="remove_all_unknown" default="false"/>
-  <arg name="distance_to_lane_threshold" default="0.2"/>
+  <arg name="distance_to_lane_threshold" default="0.3"/>
 
   <node pkg="lanelet_unknown_filter" exec="lanelet_unknown_filter" name="lanelet_unknown_filter" output="screen">
     <remap from="output/objects" to="$(var output/objects)"/>
